@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Configuration;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Web;
 using System.Web.Script.Serialization;
@@ -48,12 +49,19 @@ namespace Honeybadger.ErrorReporter
 
         private static dynamic GetRequestInformation(HttpRequest request)
         {
-            return new
+            Dictionary<string, object> result = new Dictionary<string, object>()
             {
-                url = request.Url.ToString(),
-                form = request.Form,
-                context = GetContext()
+                { "url", request.Url.ToString() },
+                { "form", request.Form },
+                { "context", GetContext() },
+                { "cgi_data", GetCGIData(request) }
             };
+            object paramsResult = GetParams(request);
+            if (paramsResult != null)
+            {
+                result["params"] = paramsResult;
+            }
+            return result;
         }
 
         private static dynamic GetContext()
@@ -74,6 +82,81 @@ namespace Honeybadger.ErrorReporter
                 };
             }
             return context;
+        }
+
+        private static object GetParams(HttpRequest request)
+        {
+            string requestBody = null;
+            try
+            {
+                MemoryStream memstream = new MemoryStream();
+                request.InputStream.CopyTo(memstream);
+                memstream.Position = 0;
+                using (StreamReader reader = new StreamReader(memstream))
+                {
+                    requestBody = reader.ReadToEnd();
+                }
+
+                if (!string.IsNullOrEmpty(requestBody))
+                {
+                    try
+                    {
+                        if (request.Params != null && request.Params["CONTENT_TYPE"] != null && request.Params["CONTENT_TYPE"].ToLower() == "application/json")
+                        {
+                            return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(requestBody);
+                        }
+                    }
+                    catch { }
+
+                    // return raw body as string
+                    return new
+                    {
+                        request_body = requestBody
+                    };
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        private static List<string> CGIKeys = new List<string>()
+        {
+            "AUTH_USER",
+            "CONTENT_LENGTH",
+            "CONTENT_TYPE",
+            "GATEWAY_INTERFACE",
+            "HTTPS",
+            "LOCAL_ADDR",
+            "PATH_INFO",
+            "QUERY_STRING",
+            "REMOTE_ADDR",
+            "REMOTE_HOST",
+            "REMOTE_PORT",
+            "REQUEST_METHOD",
+            "SERVER_PROTOCOL",
+            "SERVER_SOFTWARE",
+            "HTTP_CACHE_CONTROL",
+            "HTTP_CONNECTION",
+            "HTTP_CONTENT_LENGTH",
+            "HTTP_CONTENT_TYPE",
+            "HTTP_ACCEPT",
+            "HTTP_ACCEPT_ENCODING",
+            "HTTP_ACCEPT_LANGUAGE",
+            "HTTP_HOST",
+            "HTTP_USER_AGENT",
+            "HTTP_ORIGIN"
+        };
+
+        private static object GetCGIData(HttpRequest request)
+        {
+            if (request.Params == null)
+            {
+                return null;
+            }
+
+            Dictionary<string, string> paramValues = CGIKeys.ToDictionary(k => k, k => request.Params[k]);
+            return paramValues;
         }
 
         private static dynamic GetErrorInformation(Exception exception)
